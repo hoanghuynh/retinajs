@@ -1,5 +1,6 @@
 (function() {
     var root = (typeof exports === 'undefined' ? window : exports);
+    var isRetina = null;
     var config = {
         // An option to choose a suffix for 2x images
         retinaImageSuffix : '@2x',
@@ -10,10 +11,36 @@
 
         // Resize high-resolution images to original image's pixel dimensions
         // https://github.com/imulus/retinajs/issues/8
-        force_original_dimensions: true
+        force_original_dimensions: false
     };
 
-    function Retina() {}
+    function addOnLoadEvent(func) {
+        var oldOnLoad = root.onload;
+        if (typeof root.onload != 'function') {
+            root.onload = func;
+        } else {
+            root.onload = function() { oldOnLoad(); func(); }
+        }
+    }
+
+    function NonRetina() {}
+
+    NonRetina.init = function(context) {
+        if (context === null) {
+            context = root;
+        }
+        
+        addOnLoadEvent(function() {
+            var images = document.getElementsByTagName('img'), imagesLength = images.length, i, image;
+            for (i = 0; i < imagesLength; i += 1) {
+                image = images[i];
+                if (!image.getAttribute('src') && image.getAttribute('lowsrc'))
+                    image.setAttribute('src', image.getAttribute('lowsrc'));
+            };
+        });
+    };
+
+    function Retina() {}    
 
     root.Retina = Retina;
 
@@ -29,17 +56,19 @@
         }
     };
 
+
     Retina.init = function(context) {
         if (context === null) {
             context = root;
         }
-        context.addEventListener('load', function (){
+
+        addOnLoadEvent(function() {
             var images = document.getElementsByTagName('img'), imagesLength = images.length, retinaImages = [], i, image;
             for (i = 0; i < imagesLength; i += 1) {
                 image = images[i];
-
-                if (!!!image.getAttributeNode('data-no-retina')) {
-                    if (image.src) {
+                if (!!!image.getAttribute('data-no-retina')) {
+                    //if (image.getAttribute('lowsrc') || image.getAttribute('src')) { //TODO
+                    if (image.getAttribute('lowsrc')) {
                         retinaImages.push(new RetinaImage(image));
                     }
                 }
@@ -48,21 +77,22 @@
     };
 
     Retina.isRetina = function(){
-        var mediaQuery = '(-webkit-min-device-pixel-ratio: 1.5), (min--moz-device-pixel-ratio: 1.5), (-o-min-device-pixel-ratio: 3/2), (min-resolution: 1.5dppx)';
+        if (isRetina == null) {
+            var mediaQuery = '(-webkit-min-device-pixel-ratio: 1.5), (min--moz-device-pixel-ratio: 1.5), (-o-min-device-pixel-ratio: 3/2), (min-resolution: 1.5dppx)';
 
-        if (root.devicePixelRatio > 1) {
-            return true;
+            if (root.devicePixelRatio >= 1.5) {
+                isRetina = true;
+            } else if (root.matchMedia && root.matchMedia(mediaQuery).matches) {
+                isRetina = true;
+            } else {
+                isRetina = false;
+            }
         }
-
-        if (root.matchMedia && root.matchMedia(mediaQuery).matches) {
-            return true;
-        }
-
-        return false;
+        return isRetina;
     };
 
 
-    var regexMatch = /\.[\w\?=]+$/;
+    var regexMatch = /\.\w+$/;
     function suffixReplace (match) {
         return config.retinaImageSuffix + match;
     }
@@ -92,7 +122,7 @@
     RetinaImagePath.confirmed_paths = [];
 
     RetinaImagePath.prototype.is_external = function() {
-        return !!(this.path.match(/^https?\:/i) && !this.path.match('//' + document.domain) );
+        return !!(this.path.match(/^https?\:/i) && !this.path.match('//' + document.domain));
     };
 
     RetinaImagePath.prototype.check_2x_variant = function(callback) {
@@ -108,7 +138,7 @@
             http.open('HEAD', this.at_2x_path);
             http.onreadystatechange = function() {
                 if (http.readyState !== 4) {
-                    return callback(false);
+                    return; // return callback(false);
                 }
 
                 if (http.status >= 200 && http.status <= 399) {
@@ -131,11 +161,14 @@
 
     function RetinaImage(el) {
         this.el = el;
-        this.path = new RetinaImagePath(this.el.getAttribute('src'), this.el.getAttribute('data-at2x'));
+        this.path = new RetinaImagePath(this.el.getAttribute('lowsrc') ? this.el.getAttribute('lowsrc') : this.el.getAttribute('src'), this.el.getAttribute('data-at2x'));
         var that = this;
         this.path.check_2x_variant(function(hasVariant) {
             if (hasVariant) {
                 that.swap();
+            } else {
+                if (!that.el.getAttribute('src') && that.el.getAttribute('lowsrc'))
+                    that.el.setAttribute('src', that.el.getAttribute('lowsrc'));
             }
         });
     }
@@ -153,23 +186,40 @@
                 setTimeout(load, 5);
             } else {
                 if (config.force_original_dimensions) {
-                    if (that.el.offsetWidth == 0 && that.el.offsetHeight == 0) {
-                        that.el.setAttribute('width', that.el.naturalWidth);
-                        that.el.setAttribute('height', that.el.naturalHeight);
-                    } else {
-                        that.el.setAttribute('width', that.el.offsetWidth);
-                        that.el.setAttribute('height', that.el.offsetHeight);
+                    if (!that.el.getAttribute('width') && !that.el.getAttribute('height')) {
+                        if (that.el.offsetWidth == 0 && that.el.offsetHeight == 0) {
+                            that.el.setAttribute('width', that.el.naturalWidth);
+                            that.el.setAttribute('height', that.el.naturalHeight);
+                        } else {
+                            that.el.setAttribute('width', that.el.offsetWidth);
+                            that.el.setAttribute('height', that.el.offsetHeight);
+                        }
+                    }
+                    that.el.setAttribute('src', path);
+                } else {
+                    that.el.setAttribute('src', path);
+                    if (!that.el.getAttribute('width') && !that.el.getAttribute('height') && that.el.getAttribute('data-no-set-dimens') == null) {
+                        function applyNaturalDimens() {
+                            if (!that.el.complete) {
+                                setTimeout(applyNaturalDimens, 5);
+                            } else {
+                                that.el.setAttribute('width', that.el.naturalWidth / 2);
+                                that.el.setAttribute('height', that.el.naturalHeight / 2);
+                            }
+                        }
+                        applyNaturalDimens();
                     }
                 }
-
-                that.el.setAttribute('src', path);
             }
         }
         load();
     };
 
-
     if (Retina.isRetina()) {
+        console.log("[hdpi] Display is hi-res, now use hi-res assets.");
         Retina.init(root);
+    } else {
+        console.log("[hdpi] Display is not hi-res, stick to low-res assets.");
+        NonRetina.init(root);
     }
 })();
